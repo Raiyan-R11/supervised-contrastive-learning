@@ -8,15 +8,14 @@ import os
 import torch
 import torch.backends.cudnn as cudnn
 from torchvision.models import efficientnet_b0
-from torchvision import transforms, datasets
+from torchvision import transforms
 from torch import nn
+import torch.nn.init as init
 import torch.nn.functional as F
 
 import numpy as np
 import matplotlib.pyplot as plt
-from sklearn.manifold import TSNE
 
-# from main_ce import set_loader
 from util import AverageMeter
 from util import adjust_learning_rate, warmup_learning_rate, accuracy
 from util import set_optimizer
@@ -26,6 +25,7 @@ try:
     from apex import amp, optimizers
 except ImportError:
     pass
+
 
 def parse_option():
     parser = argparse.ArgumentParser('argument for training')
@@ -42,7 +42,7 @@ def parse_option():
     # optimization
     parser.add_argument('--learning_rate', type=float, default=0.1,
                         help='learning rate')
-    parser.add_argument('--lr_decay_epochs', type=str, default='3,6,9',
+    parser.add_argument('--lr_decay_epochs', type=str, default='10,20,30',
                         help='where to decay lr, can be a list')
     parser.add_argument('--lr_decay_rate', type=float, default=0.2,
                         help='decay rate for learning rate')
@@ -53,8 +53,7 @@ def parse_option():
 
     # model dataset
     parser.add_argument('--model', type=str, default='effnet-b0')
-    parser.add_argument('--dataset', type=str, default='cifar10',
-                        choices=['cifar10', 'cifar100'], help='dataset')
+    parser.add_argument('--dataset', type=str, default='pathmnist', help='dataset')
 
     # other setting
     parser.add_argument('--cosine', action='store_true',
@@ -62,14 +61,14 @@ def parse_option():
     parser.add_argument('--warm', action='store_true',
                         help='warm-up for large batch training')
 
-    parser.add_argument('--ckpt', type=str, default='/home/cvteam1/cv-project/CV_Project_SupCon/save/SupCon/cifar10_models/SimCLR_cifar10_effnet-b0_lr_0.05_decay_0.0001_bsz_128_temp_0.07_trial_1/last.pth',
+    parser.add_argument('--ckpt', type=str, default='/home/cvteam1/cv-project/CV_Project_SupCon/save/SupCon/pathmnist_models/SimCLR_pathmnist_effnet_b0_lr_0.05_decay_0.0001_bsz_128_temp_0.07_trial_0/last.pth',
                         help='path to pre-trained model')
 
     opt = parser.parse_args()
 
     # set the path according to the environment
     opt.data_folder = './datasets/'
-
+    
     iterations = opt.lr_decay_epochs.split(',')
     opt.lr_decay_epochs = list([])
     for it in iterations:
@@ -80,7 +79,7 @@ def parse_option():
 
     # Save path
     opt.method = 'SimCLR'
-    opt.trial = 1
+    opt.trial = '512-featdim'
     opt.model_path = './save/SupCon/{}_models'.format(opt.dataset)
     opt.model_name = '{}-linear_{}_{}_lr_{}_decay_{}_bsz_{}_trial_{}'.\
         format(opt.method, opt.dataset, opt.model, opt.learning_rate,
@@ -101,38 +100,14 @@ def parse_option():
         else:
             opt.warmup_to = opt.learning_rate
 
-    if opt.dataset == 'cifar10':
-        opt.n_cls = 10
-    elif opt.dataset == 'cifar100':
-        opt.n_cls = 100
+    if opt.dataset == 'pathmnist':
+        opt.n_cls = 9
+        opt.size = 28
     else:
         raise ValueError('dataset not supported: {}'.format(opt.dataset))
 
     return opt
 
-# class SupConEffNet(nn.Module):
-#         """backbone + projection head"""
-
-#         # dim_in = 1280  # EfficientNet-B0 output
-#         # feat_dim = 128
-
-#         # base_model = efficientnet_b0(pretrained=True)
-#         # base_model.classifier = nn.Identity()
-
-#         def __init__(self):
-#             super(SupConEffNet, self).__init__()
-#             self.encoder = efficientnet_b0(pretrained=True)
-#             self.head = nn.Sequential(
-#                 nn.Linear(1280, 128),
-#                 nn.ReLU(inplace=True),
-#                 nn.Linear(1280, 128)
-#             )
-
-#         def forward(self, x):
-#             feat = self.encoder(x)
-#             feat = self.head(feat)
-#             feat = F.normalize(feat, dim=1)
-#             return feat
 
 class SupConEfficientNet(nn.Module):
     def __init__(self):
@@ -142,7 +117,7 @@ class SupConEfficientNet(nn.Module):
         self.head = nn.Sequential(
             nn.Linear(1280, 1280),
             nn.ReLU(inplace=True),
-            nn.Linear(1280, 128)
+            nn.Linear(1280, 512)
         )
 
     def forward(self, x):
@@ -151,22 +126,35 @@ class SupConEfficientNet(nn.Module):
         feat = F.normalize(feat, dim=1)
         return feat
 
-
 class LinearClassifier(nn.Module):
     """Linear classifier"""
     def __init__(self):
         super(LinearClassifier, self).__init__()
-        feat_dim = 1280
-        num_classes = 10
+        feat_dim = 512  # EfficientNet-B0 output
+        num_classes = 9
         self.fc = nn.Linear(feat_dim, num_classes)
+
+        # Apply He (Kaiming) initialization
+        self._initialize_weights()
+
 
     def forward(self, features):
         return self.fc(features)
+    
+    def _initialize_weights(self):
+        # Apply He initialization to weights
+        init.kaiming_normal_(self.fc.weight, mode='fan_out', nonlinearity='relu')
+        
+        # Initialize biases to zeros (common practice)
+        init.zeros_(self.fc.bias)
 
 
 def set_model(opt):
     model = SupConEfficientNet()
     criterion = torch.nn.CrossEntropyLoss()
+
+    for param in model.encoder.parameters():
+        param.requires_grad = False
 
     classifier = LinearClassifier()
 
@@ -195,56 +183,54 @@ def set_model(opt):
 
     return model, classifier, criterion
 
+# set_loader for PathMNIST 
 def set_loader(opt):
-    # construct data loader
-    if opt.dataset == 'cifar10':
-        mean = (0.4914, 0.4822, 0.4465)
-        std = (0.2023, 0.1994, 0.2010)
-    elif opt.dataset == 'cifar100':
-        mean = (0.5071, 0.4867, 0.4408)
-        std = (0.2675, 0.2565, 0.2761)
-    else:
-        raise ValueError('dataset not supported: {}'.format(opt.dataset))
-    normalize = transforms.Normalize(mean=mean, std=std)
+    from medmnist import PathMNIST
+    from medmnist import INFO
 
+    # Mean and std (approximate, based on PathMNIST)
+    mean=(0.7405, 0.5330, 0.7058)
+    std=(0.1237, 0.1767, 0.1244)
+    normalize = transforms.Normalize(mean=mean, std=std)
+    
     train_transform = transforms.Compose([
-        transforms.RandomResizedCrop(size=32, scale=(0.2, 1.)),
+        transforms.RandomResizedCrop(size=28, scale=(0.2, 1.)),
         transforms.RandomHorizontalFlip(),
         transforms.ToTensor(),
         normalize,
     ])
-
+    
     val_transform = transforms.Compose([
         transforms.ToTensor(),
         normalize,
     ])
-
-    if opt.dataset == 'cifar10':
-        train_dataset = datasets.CIFAR10(root=opt.data_folder,
-                                         transform=train_transform,
-                                         download=True)
-        val_dataset = datasets.CIFAR10(root=opt.data_folder,
-                                       train=False,
-                                       transform=val_transform)
-    elif opt.dataset == 'cifar100':
-        train_dataset = datasets.CIFAR100(root=opt.data_folder,
-                                          transform=train_transform,
-                                          download=True)
-        val_dataset = datasets.CIFAR100(root=opt.data_folder,
-                                        train=False,
-                                        transform=val_transform)
+    
+    if opt.dataset == 'pathmnist':
+        # Load the train and test splits directly from the PathMNIST dataset
+        train_dataset = PathMNIST(root=opt.data_folder, split='train', transform=train_transform, download=True)
+        test_dataset = PathMNIST(root=opt.data_folder, split='test', transform=val_transform, download=True)
+        val_dataset = PathMNIST(root=opt.data_folder, split='val', transform=val_transform, download=True)
+        
     else:
-        raise ValueError(opt.dataset)
-
-    train_sampler = None
+        raise ValueError('Dataset not supported: {}'.format(opt.dataset))
+    
     train_loader = torch.utils.data.DataLoader(
-        train_dataset, batch_size=opt.batch_size, shuffle=(train_sampler is None),
-        num_workers=opt.num_workers, pin_memory=True, sampler=train_sampler)
+        train_dataset, batch_size=opt.batch_size, shuffle=True,
+        num_workers=opt.num_workers, pin_memory=True
+    )
+    
     val_loader = torch.utils.data.DataLoader(
         val_dataset, batch_size=256, shuffle=False,
-        num_workers=8, pin_memory=True)
+        num_workers=opt.num_workers, pin_memory=True
+    )
+    
+    test_loader = torch.utils.data.DataLoader(
+        test_dataset, batch_size=256, shuffle=False,
+        num_workers=opt.num_workers, pin_memory=True
+    )
+    
+    return train_loader, val_loader, test_loader
 
-    return train_loader, val_loader
 
 def train(train_loader, model, classifier, criterion, optimizer, epoch, opt):
     """one epoch training"""
@@ -259,17 +245,17 @@ def train(train_loader, model, classifier, criterion, optimizer, epoch, opt):
     end = time.time()
     for idx, (images, labels) in enumerate(train_loader):
         data_time.update(time.time() - end)
-
+        
         images = images.cuda(non_blocking=True)
         labels = labels.cuda(non_blocking=True)
+        labels = labels.squeeze()
         bsz = labels.shape[0]
 
         # warm-up learning rate
         warmup_learning_rate(opt, epoch, idx, len(train_loader), optimizer)
 
-        # compute loss
         with torch.no_grad():
-            features = model.encoder(images)
+            features = model(images)  # This will call the full SupConEfficientNet forward
         output = classifier(features.detach())
         loss = criterion(output, labels)
 
@@ -315,10 +301,10 @@ def validate(val_loader, model, classifier, criterion, opt):
         for idx, (images, labels) in enumerate(val_loader):
             images = images.float().cuda()
             labels = labels.cuda()
+            labels = labels.squeeze()
             bsz = labels.shape[0]
 
-            # forward
-            output = classifier(model.encoder(images))
+            output = classifier(model(images))
             loss = criterion(output, labels)
 
             # update metric
@@ -341,38 +327,6 @@ def validate(val_loader, model, classifier, criterion, opt):
     print(' * Acc@1 {top1.avg:.3f}'.format(top1=top1))
     return losses.avg, top1.avg
 
-def plot_tsne(model, val_loader, epoch, opt, max_samples=1000):
-    model.eval()
-    features_list = []
-    labels_list = []
-
-    with torch.no_grad():
-        for images, labels in val_loader:
-            images = images.cuda()
-            features = model.encoder(images)
-            features = features.view(features.size(0), -1)
-            features_list.append(features.cpu().numpy())
-            labels_list.append(labels.cpu().numpy())
-
-            if len(np.concatenate(labels_list)) >= max_samples:
-                break
-
-    features_np = np.concatenate(features_list)[:max_samples]
-    labels_np = np.concatenate(labels_list)[:max_samples]
-
-    print("Running t-SNE on {} samples...".format(len(features_np)))
-    tsne = TSNE(n_components=2, random_state=42, perplexity=30)
-    tsne_results = tsne.fit_transform(features_np)
-
-    plt.figure(figsize=(10, 8))
-    scatter = plt.scatter(tsne_results[:, 0], tsne_results[:, 1], c=labels_np, cmap=plt.cm.get_cmap('jet', opt.n_cls), alpha=0.6)
-    plt.colorbar(scatter, ticks=range(opt.n_cls))
-    plt.title(f't-SNE of Validation Features (Epoch {epoch})')
-    plt.grid(True)
-    plt.tight_layout()
-    plt.savefig(f"tsne_plot_epoch_{epoch}.png")
-    plt.show()
-    print('TSNE plot saved')
 
 def plot_loss_curves(epochs, train_losses, val_losses, train_accs, val_accs, save_folder):
     plt.figure(figsize=(12, 5))
@@ -409,12 +363,28 @@ def plot_loss_curves(epochs, train_losses, val_losses, train_accs, val_accs, sav
     plt.close()
     print(f'Train+Val curves and accuracies saved to {save_folder}')
 
+
+def save_model(model, classifier, optimizer, opt, epoch, save_file):
+    """
+    Save the current model state with all necessary information
+    """
+    print('==> Saving model checkpoint...')
+    state = {
+        'model': model.state_dict(),
+        'classifier': classifier.state_dict(),
+        'optimizer': optimizer.state_dict(),
+        'epoch': epoch,
+    }
+    torch.save(state, save_file)
+    print(f'==> Model saved to {save_file}')
+
+
 def main():
     best_acc = 0
     opt = parse_option()
 
     # build data loader
-    train_loader, val_loader = set_loader(opt)
+    train_loader, val_loader, test_loader = set_loader(opt)
 
     # build model and criterion
     model, classifier, criterion = set_model(opt)
@@ -427,6 +397,10 @@ def main():
     train_accs = []
     val_accs = []
     epochs = []
+    
+    # Initialize variable to store best model checkpoint path
+    best_model_path = os.path.join(opt.save_folder, 'best_model.pth')
+    best_epoch = 0
 
     # training routine
     for epoch in range(1, opt.epochs + 1):
@@ -442,8 +416,17 @@ def main():
 
         # eval for one epoch
         val_loss, val_acc = validate(val_loader, model, classifier, criterion, opt)
+        
+        # Save model if it's the best so far
         if val_acc > best_acc:
             best_acc = val_acc
+            best_epoch = epoch
+            save_model(model, classifier, optimizer, opt, epoch, best_model_path)
+            print(f'==> New best model saved (epoch {epoch}, accuracy: {best_acc:.2f}%)')
+
+        # Save last model
+        last_model_path = os.path.join(opt.save_folder, 'last_model.pth')
+        save_model(model, classifier, optimizer, opt, epoch, last_model_path)
 
         train_losses.append(train_loss)
         val_losses.append(val_loss)
@@ -452,7 +435,18 @@ def main():
         epochs.append(epoch)
 
     plot_loss_curves(epochs, train_losses, val_losses, train_accs, val_accs, opt.save_folder)
-    print('best accuracy: {:.2f}'.format(best_acc))
+    print('Best accuracy: {:.2f}% at epoch {}'.format(best_acc, best_epoch))
+    
+    # Evaluate best model on test set
+    print('\n==> Evaluating best model on test set...')
+    # Load the best model
+    best_checkpoint = torch.load(best_model_path)
+    model.load_state_dict(best_checkpoint['model'])
+    classifier.load_state_dict(best_checkpoint['classifier'])
+    
+    # Evaluate on test set
+    test_loss, test_acc = validate(test_loader, model, classifier, criterion, opt)
+    print('Test accuracy with best model: {:.2f}%'.format(test_acc))
 
 
 if __name__ == '__main__':

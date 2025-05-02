@@ -1,0 +1,14 @@
+Best Model: best_model.pth
+Validation Accuracy: 9.30%
+Test Accuracy: 10.58%
+
+Per-class Test Metrics:
+ADI: Precision=0.0000, Recall=0.0000, F1=0.0000, Support=1338.0
+BACK: Precision=0.0000, Recall=0.0000, F1=0.0000, Support=847.0
+DEB: Precision=0.0732, Recall=0.0088, F1=0.0158, Support=339.0
+LYM: Precision=0.0000, Recall=0.0000, F1=0.0000, Support=634.0
+MUC: Precision=0.0000, Recall=0.0000, F1=0.0000, Support=1035.0
+MUS: Precision=0.0253, Recall=0.0101, F1=0.0145, Support=592.0
+NORM: Precision=0.2607, Recall=0.9825, F1=0.4121, Support=741.0
+STR: Precision=0.0246, Recall=0.0475, F1=0.0324, Support=421.0
+TUM: Precision=0.0013, Recall=0.0024, F1=0.0017, Support=1233.0

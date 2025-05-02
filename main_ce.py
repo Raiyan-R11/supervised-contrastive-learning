@@ -30,14 +30,15 @@ except ImportError:
 
 import random
 
+
 def set_seed(seed=42):
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
     torch.cuda.manual_seed(seed)
-    torch.cuda.manual_seed_all(seed)  # if using multi-GPU
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
+
 
 def parse_option():
     parser = argparse.ArgumentParser('argument for training')
@@ -54,9 +55,9 @@ def parse_option():
                         help='number of training epochs')
 
     # optimization
-    parser.add_argument('--learning_rate', type=float, default=0.2,
+    parser.add_argument('--learning_rate', type=float, default=0.1,
                         help='learning rate')
-    parser.add_argument('--lr_decay_epochs', type=str, default='5,10,15,20,25',
+    parser.add_argument('--lr_decay_epochs', type=str, default='30,60,90',
                         help='where to decay lr, can be a list')
     parser.add_argument('--lr_decay_rate', type=float, default=0.1,
                         help='decay rate for learning rate')
@@ -67,8 +68,7 @@ def parse_option():
 
     # model dataset
     parser.add_argument('--model', type=str, default='effnet-b0')
-    parser.add_argument('--dataset', type=str, default='cifar10',
-                        choices=['cifar10', 'cifar100'], help='dataset')
+    parser.add_argument('--dataset', type=str, default='pathmnist', help='dataset')
 
     # other setting
     parser.add_argument('--cosine', action='store_true',
@@ -96,9 +96,8 @@ def parse_option():
     for it in iterations:
         opt.lr_decay_epochs.append(int(it))
 
-    opt.model_name = 'SupCE_{}_{}_lr_{}_decay_{}_bsz_{}_trial_{}'.\
-        format(opt.dataset, opt.model, opt.learning_rate, opt.weight_decay,
-               opt.batch_size, opt.trial)
+    opt.model_name = 'SupCE_{}_{}_lr_{}_{}'.\
+        format(opt.dataset, opt.model, opt.learning_rate, opt.trial)
 
     if opt.cosine:
         opt.model_name = '{}_cosine'.format(opt.model_name)
@@ -129,26 +128,25 @@ def parse_option():
         opt.n_cls = 10
     elif opt.dataset == 'cifar100':
         opt.n_cls = 100
+    elif opt.dataset == 'pathmnist':
+        opt.n_cls = 9
     else:
         raise ValueError('dataset not supported: {}'.format(opt.dataset))
 
     return opt
 
-
+# set_loader for PathMNIST 
 def set_loader(opt, fold_idx=None):
-    # construct data loader
-    if opt.dataset == 'cifar10':
-        mean = (0.4914, 0.4822, 0.4465)
-        std = (0.2023, 0.1994, 0.2010)
-    elif opt.dataset == 'cifar100':
-        mean = (0.5071, 0.4867, 0.4408)
-        std = (0.2675, 0.2565, 0.2761)
-    else:
-        raise ValueError('dataset not supported: {}'.format(opt.dataset))
+    from medmnist import PathMNIST
+    from medmnist import INFO
+
+    mean=(0.7405, 0.5330, 0.7058)
+    std=(0.1237, 0.1767, 0.1244)
+
     normalize = transforms.Normalize(mean=mean, std=std)
 
     train_transform = transforms.Compose([
-        transforms.RandomResizedCrop(size=32, scale=(0.2, 1.)),
+        transforms.RandomResizedCrop(size=28, scale=(0.2, 1.)),  # 28x28 for PathMNIST
         transforms.RandomHorizontalFlip(),
         transforms.ToTensor(),
         normalize,
@@ -159,32 +157,18 @@ def set_loader(opt, fold_idx=None):
         normalize,
     ])
 
-    if opt.dataset == 'cifar10':
-        full_dataset = datasets.CIFAR10(root=opt.data_folder,
-                                      transform=train_transform,
-                                      download=True,
-                                      train=True)  # Use full training set for k-fold
-        test_dataset = datasets.CIFAR10(root=opt.data_folder,
-                                      train=False,
-                                      transform=val_transform)
-    elif opt.dataset == 'cifar100':
-        full_dataset = datasets.CIFAR100(root=opt.data_folder,
-                                       transform=train_transform,
-                                       download=True,
-                                       train=True)
-        test_dataset = datasets.CIFAR100(root=opt.data_folder,
-                                       train=False,
-                                       transform=val_transform)
+    if opt.dataset == 'pathmnist':
+        full_dataset = PathMNIST(root=opt.data_folder, split='train', transform=train_transform, download=True)
+        test_dataset = PathMNIST(root=opt.data_folder, split='test', transform=val_transform, download=True)
     else:
-        raise ValueError(opt.dataset)
+        raise ValueError('dataset not supported: {}'.format(opt.dataset))
 
-    # Create deterministic k-fold splits
+    # K-fold split
     skf = StratifiedKFold(n_splits=5, shuffle=True, random_state=opt.seed)
-    folds = list(skf.split(np.zeros(len(full_dataset)), full_dataset.targets))
+    folds = list(skf.split(np.zeros(len(full_dataset)), full_dataset.labels.squeeze()))
 
-    # Get train/val indices for this fold
     train_idx, val_idx = folds[fold_idx]
-    
+
     train_subset = Subset(full_dataset, train_idx)
     val_subset = Subset(full_dataset, val_idx)
 
@@ -202,7 +186,7 @@ def set_loader(opt, fold_idx=None):
         num_workers=opt.num_workers, pin_memory=True,
         worker_init_fn=seed_worker, generator=g
     )
-    
+
     val_loader = torch.utils.data.DataLoader(
         val_subset, batch_size=256, shuffle=False,
         num_workers=8, pin_memory=True
@@ -215,12 +199,13 @@ def set_loader(opt, fold_idx=None):
 
     return train_loader, val_loader, test_loader
 
+
 class SupCEEfficientNet(nn.Module):
     """encoder + classifier"""
     def __init__(self):
         super(SupCEEfficientNet, self).__init__()
         feat_dim = 1280
-        num_classes = 10
+        num_classes = 9
         
         self.encoder = efficientnet_b0(weights=EfficientNet_B0_Weights.IMAGENET1K_V1)
 
@@ -231,12 +216,12 @@ class SupCEEfficientNet(nn.Module):
 
     def forward(self, x):
         return self.fc(self.encoder(x))
-    
+
+
 def set_model(opt):
     model = SupCEEfficientNet()
     criterion = torch.nn.CrossEntropyLoss()
 
-    # enable synchronized Batch Normalization
     if opt.syncBN:
         model = apex.parallel.convert_syncbn_model(model)
 
@@ -265,13 +250,15 @@ def train(train_loader, model, criterion, optimizer, epoch, opt):
 
         images = images.cuda(non_blocking=True)
         labels = labels.cuda(non_blocking=True)
+        labels = labels.squeeze()
         bsz = labels.shape[0]
-
+        
         # warm-up learning rate
         warmup_learning_rate(opt, epoch, idx, len(train_loader), optimizer)
 
         # compute loss
         output = model(images)
+
         loss = criterion(output, labels)
 
         # update metric
@@ -315,6 +302,7 @@ def validate(val_loader, model, criterion, opt):
         for idx, (images, labels) in enumerate(val_loader):
             images = images.float().cuda()
             labels = labels.cuda()
+            labels = labels.squeeze()
             bsz = labels.shape[0]
 
             # forward
@@ -339,7 +327,7 @@ def validate(val_loader, model, criterion, opt):
                        loss=losses, top1=top1))
 
     print(' * Acc@1 {top1.avg:.3f}'.format(top1=top1))
-    return losses.avg, top1.avg.cpu()  # Ensure accuracy is returned as CPU tensor
+    return losses.avg, top1.avg.cpu()
 
 
 def plot_loss_curves(fold, epochs, train_losses, val_losses, train_accs, val_accs, save_folder):
@@ -382,7 +370,6 @@ def main():
     set_seed(42)
     opt = parse_option()
     
-
     # Track metrics across all folds
     all_fold_metrics = {
         'train_loss': [], 'val_loss': [],
@@ -391,7 +378,7 @@ def main():
     }
 
     # Perform k-fold cross-validation
-    for fold in range(5):
+    for fold in range(3):
         print(f"\n=== Fold {fold+1}/5 ===")
         
         # Build fold-specific loaders
@@ -477,6 +464,7 @@ def main():
             print(f"Average {metric}:")
             for epoch, val in enumerate(avg_values):
                 print(f"Epoch {epoch+1}: {val:.2f}")  
+
 
 if __name__ == '__main__':
     main()

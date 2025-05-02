@@ -1,0 +1,14 @@
+Best Model: fold0_best.pth
+Validation Accuracy: 95.38%
+Test Accuracy: 78.34%
+
+Per-class Test Metrics:
+ADI: Precision=0.9524, Recall=0.6278, F1=0.7568, Support=1338.0
+BACK: Precision=0.8759, Recall=1.0000, F1=0.9338, Support=847.0
+DEB: Precision=0.6009, Recall=0.3864, F1=0.4704, Support=339.0
+LYM: Precision=0.9622, Recall=0.9637, F1=0.9630, Support=634.0
+MUC: Precision=0.9799, Recall=0.7990, F1=0.8803, Support=1035.0
+MUS: Precision=0.4572, Recall=0.8581, F1=0.5966, Support=592.0
+NORM: Precision=0.8209, Recall=0.7544, F1=0.7862, Support=741.0
+STR: Precision=0.7675, Recall=0.4157, F1=0.5393, Support=421.0
+TUM: Precision=0.6983, Recall=0.9140, F1=0.7917, Support=1233.0

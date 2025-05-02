@@ -35,7 +35,7 @@ def parse_option():
 
     parser.add_argument('--print_freq', type=int, default=10,
                         help='print frequency')
-    parser.add_argument('--save_freq', type=int, default=1,
+    parser.add_argument('--save_freq', type=int, default=10,
                         help='save frequency')
     parser.add_argument('--batch_size', type=int, default=128,
                         help='batch_size')
@@ -47,7 +47,7 @@ def parse_option():
     # optimization
     parser.add_argument('--learning_rate', type=float, default=0.05,
                         help='learning rate')
-    parser.add_argument('--lr_decay_epochs', type=str, default='700,800,900',
+    parser.add_argument('--lr_decay_epochs', type=str, default='30,60,90',
                         help='where to decay lr, can be a list')
     parser.add_argument('--lr_decay_rate', type=float, default=0.1,
                         help='decay rate for learning rate')
@@ -57,16 +57,15 @@ def parse_option():
                         help='momentum')
 
     # model dataset
-    parser.add_argument('--model', type=str, default='effnet-b0')
-    parser.add_argument('--dataset', type=str, default='cifar10',
-                        choices=['cifar10', 'cifar100', 'path'], help='dataset')
+    parser.add_argument('--model', type=str, default='effnet_b0',)
+    parser.add_argument('--dataset', type=str, default='pathmnist',help='dataset')
     parser.add_argument('--mean', type=str, help='mean of dataset in path in form of str tuple')
     parser.add_argument('--std', type=str, help='std of dataset in path in form of str tuple')
     parser.add_argument('--data_folder', type=str, default=None, help='path to custom dataset')
-    parser.add_argument('--size', type=int, default=32, help='parameter for RandomResizedCrop')
+    parser.add_argument('--size', type=int, default=28, help='parameter for RandomResizedCrop')
 
     # method
-    parser.add_argument('--method', type=str, default='SimCLR',
+    parser.add_argument('--method', type=str, default='SupCon',
                         choices=['SupCon', 'SimCLR'], help='choose method')
 
     # temperature
@@ -80,11 +79,11 @@ def parse_option():
                         help='using synchronized batch normalization')
     parser.add_argument('--warm', action='store_true',
                         help='warm-up for large batch training')
-    parser.add_argument('--trial', type=str, default='1',
+    parser.add_argument('--trial', type=str, default='0',
                         help='id for recording multiple runs')
 
     opt = parser.parse_args()
-    opt.n_cls = 10
+    opt.n_cls = 9
     # check if dataset is path that passed required arguments
     if opt.dataset == 'path':
         assert opt.data_folder is not None \
@@ -105,10 +104,6 @@ def parse_option():
     opt.model_name = '{}_{}_{}_lr_{}_decay_{}_bsz_{}_temp_{}_trial_{}'.\
         format(opt.method, opt.dataset, opt.model, opt.learning_rate,
                opt.weight_decay, opt.batch_size, opt.temp, opt.trial)
-
-    opt.save_folder = os.path.join(opt.model_path, opt.model_name)
-    if not os.path.isdir(opt.save_folder):
-        os.makedirs(opt.save_folder)
 
     if opt.cosine:
         opt.model_name = '{}_cosine'.format(opt.model_name)
@@ -139,6 +134,10 @@ def parse_option():
 
 
 def set_loader(opt):
+    from medmnist import PathMNIST
+    #import medmnist
+    from medmnist import INFO
+
     # construct data loader
     if opt.dataset == 'cifar10':
         mean = (0.4914, 0.4822, 0.4465)
@@ -146,11 +145,12 @@ def set_loader(opt):
     elif opt.dataset == 'cifar100':
         mean = (0.5071, 0.4867, 0.4408)
         std = (0.2675, 0.2565, 0.2761)
-    elif opt.dataset == 'path':
-        mean = eval(opt.mean)
-        std = eval(opt.std)
+    elif opt.dataset == 'pathmnist':
+        mean=(0.7405, 0.5330, 0.7058)
+        std=(0.1237, 0.1767, 0.1244)
     else:
         raise ValueError('dataset not supported: {}'.format(opt.dataset))
+
     normalize = transforms.Normalize(mean=mean, std=std)
 
     train_transform = transforms.Compose([
@@ -172,9 +172,9 @@ def set_loader(opt):
         train_dataset = datasets.CIFAR100(root=opt.data_folder,
                                           transform=TwoCropTransform(train_transform),
                                           download=True)
-    elif opt.dataset == 'path':
-        train_dataset = datasets.ImageFolder(root=opt.data_folder,
-                                            transform=TwoCropTransform(train_transform))
+    elif opt.dataset == 'pathmnist':
+        # download PathMNIST dataset
+        train_dataset = PathMNIST(split='train', root=opt.data_folder, download=True, transform=TwoCropTransform(train_transform))
     else:
         raise ValueError(opt.dataset)
 
@@ -182,11 +182,9 @@ def set_loader(opt):
     train_loader = torch.utils.data.DataLoader(
         train_dataset, batch_size=opt.batch_size, shuffle=(train_sampler is None),
         num_workers=opt.num_workers, pin_memory=True, sampler=train_sampler)
-    val_loader = torch.utils.data.DataLoader(
-        train_dataset, batch_size=opt.batch_size, shuffle=(train_sampler is None),
-        num_workers=opt.num_workers, pin_memory=True, sampler=train_sampler)
 
-    return train_loader,val_loader
+    return train_loader
+
 
 class SupConEfficientNet(nn.Module):
         """backbone + projection head"""
@@ -196,7 +194,7 @@ class SupConEfficientNet(nn.Module):
             self.encoder.classifier = nn.Identity()
 
             dim_in = 1280  # EfficientNet-B0 output
-            feat_dim = 128
+            feat_dim = 512
 
             self.head = nn.Sequential(
                 nn.Linear(dim_in, dim_in),
@@ -291,18 +289,6 @@ def plot_tsne(model, val_loader, epoch, opt, max_samples=1000):
     model.eval()
     features_list = []
     labels_list = []
-    # with torch.no_grad():
-    # for images, labels in val_loader:
-    #     images = images[0].cuda()  # Fix: take the first view
-    #     labels = labels.cuda()
-        
-    #     features = model.encoder(images)
-    #     features = features.view(features.size(0), -1)
-    #     features_list.append(features.cpu().numpy())
-    #     labels_list.append(labels.cpu().numpy())
-
-    #     if len(np.concatenate(labels_list)) >= max_samples:
-    #         break
 
     with torch.no_grad():
         for images, labels in val_loader:
@@ -332,11 +318,12 @@ def plot_tsne(model, val_loader, epoch, opt, max_samples=1000):
     plt.show()
     print(f'TSNE plot saved in {opt.save_folder}')
 
+
 def main():
     opt = parse_option()
 
     # build data loader
-    train_loader, val_loader = set_loader(opt)
+    train_loader = set_loader(opt)
 
     # build model and criterion
     model, criterion = set_model(opt)
@@ -365,13 +352,13 @@ def main():
             save_file = os.path.join(
                 opt.save_folder, 'ckpt_epoch_{epoch}.pth'.format(epoch=epoch))
             save_model(model, optimizer, opt, epoch, save_file)
-        plot_tsne(model, val_loader, epoch, opt)
+        plot_tsne(model, train_loader, epoch, opt)
 
     # save the last model
     save_file = os.path.join(
         opt.save_folder, 'last.pth')
     save_model(model, optimizer, opt, opt.epochs, save_file)
-    print(f'Model saved in {opt.save_folder}')
+
 
 if __name__ == '__main__':
     main()
