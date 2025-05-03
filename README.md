@@ -7,6 +7,11 @@ This repository provides a PyTorch-based reference implementation of two influen
 * [Supervised Contrastive Learning](https://arxiv.org/abs/2004.11362) (SupCon)
 * [SimCLR: A Simple Framework for Contrastive Learning](https://arxiv.org/abs/2002.05709)
 
+### PathMNIST samples
+The image below shows sample images from the 9 tissue classes in the PathMNIST dataset.
+<p align="center">
+  <img src="datasets/pathmnist_grid.png" width="500">
+</p>
 ---
 
 ## 📊 Results
