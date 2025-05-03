@@ -1,7 +1,3 @@
-Here's a cleaner and more polished version of your GitHub README:
-
----
-
 # SimCLR vs SupCon
 
 ## Exploring Unsupervised and Supervised Contrastive Learning with EfficientNet-B0 on PathMNIST
