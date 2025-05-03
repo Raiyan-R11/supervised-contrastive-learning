@@ -7,5 +7,3 @@ __pycache__/
 # Ignore all .log files
 *.log
 
-# Ignore all .pth files
-*.pth
