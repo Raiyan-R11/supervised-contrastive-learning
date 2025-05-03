@@ -54,6 +54,8 @@ def parse_option():
     # model dataset
     parser.add_argument('--model', type=str, default='effnet-b0')
     parser.add_argument('--dataset', type=str, default='pathmnist', help='dataset')
+    parser.add_argument('--trial', type=str, default='0',
+                        help='id for recording multiple runs')
 
     # other setting
     parser.add_argument('--cosine', action='store_true',
@@ -78,8 +80,8 @@ def parse_option():
         opt.model_name = '{}_cosine'.format(opt.model_name)
 
     # Save path
-    opt.method = 'SimCLR'
-    opt.trial = '512-featdim'
+    opt.method = opt.method = opt.ckpt.split('\\')[-2].split('_')[0]
+
     opt.model_path = './save/SupCon/{}_models'.format(opt.dataset)
     opt.model_name = '{}-linear_{}_{}_lr_{}_decay_{}_bsz_{}_trial_{}'.\
         format(opt.method, opt.dataset, opt.model, opt.learning_rate,
@@ -160,7 +162,8 @@ def set_model(opt):
 
     print('model:',model)
     print('classifier:',classifier)
-    ckpt = torch.load(opt.ckpt, map_location='cpu')
+    #ckpt = torch.load(opt.ckpt, map_location='cpu')
+    ckpt = torch.load(opt.ckpt, map_location='cuda:0',weights_only=False)
     state_dict = ckpt['model']
 
     if torch.cuda.is_available():
