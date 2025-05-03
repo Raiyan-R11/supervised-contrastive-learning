@@ -13,6 +13,7 @@ The image below shows sample images from the 9 tissue classes in the PathMNIST d
   <img src="datasets/pathmnist_grid.png" width="500">
 </p>
 The 9 classes include ADI (Adipose), BACK (Background), DEB (Debris), LYM (Lymphocytes), MUC (Mucus), MUS (Smooth Muscle), NORM (Normal Colon Mucosa) , STR (Cancer-associated Stroma), and TUM (Colorectal Adenocarcinoma Epithelium).
+
 ---
 
 ## 📊 Results
