@@ -71,7 +71,7 @@ python linear.py --ckpt /path/to/last.pth
 python main_supcon-linear_test.py --model_path /path/to/best.pth
 ```
 
-### (3) SimCLR
+### (3) Unsupervised Contrastive Learning (SimCLR)
 
 **Pretraining:**
 
